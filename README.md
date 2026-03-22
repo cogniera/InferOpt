@@ -1,4 +1,4 @@
-# InfraOpt
+# InferOpt
 
 **Reduce LLM inference costs through intelligent template caching and slot filling.**
 
