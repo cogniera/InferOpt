@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InferOpt</title>
+<meta name="description" content="Cheaper LLM inference through template caching and slot filling.">
+<style>
+:root { --bg: #07080f; --panel: #0f1120; --line: #262a45; --fg: #eef0ff; --mute: #a3a8c9; --accent: #8b7bff; --hit: #4ade9c; --miss: #ffb454; }
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 17px/1.65 system-ui, 'Segoe UI', sans-serif; }
+a { color: inherit; }
+main, header, footer { width: min(960px, 100% - 40px); margin-inline: auto; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 26px 0; font-weight: 650; }
+header b { color: var(--accent); }
+h1 { font-size: clamp(38px, 6.4vw, 66px); line-height: 1.06; letter-spacing: -0.025em; max-width: 15ch; margin-top: clamp(30px, 8vh, 84px); text-wrap: balance; }
+.lead { color: var(--mute); font-size: clamp(18px, 2vw, 21px); max-width: 56ch; margin-top: 20px; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.btn { display: inline-block; padding: 12px 20px; border-radius: 10px; text-decoration: none; font-weight: 600; border: 1px solid var(--line); }
+.btn.main { background: var(--accent); color: #0a0820; border-color: transparent; }
+.btn:hover { filter: brightness(1.12); }
+h2 { font-size: clamp(26px, 3.2vw, 34px); letter-spacing: -0.015em; margin-top: clamp(64px, 11vh, 110px); }
+h2 + p { color: var(--mute); max-width: 62ch; margin-top: 8px; }
+.demo { margin-top: 26px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: clamp(16px, 3vw, 28px); }
+.asks { display: flex; flex-wrap: wrap; gap: 9px; }
+button { font: inherit; color: inherit; background: none; border: 1px solid var(--line); border-radius: 999px; padding: 9px 16px; cursor: pointer; min-height: 44px; }
+button[aria-pressed='true'] { border-color: var(--accent); background: rgba(139, 123, 255, 0.16); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 22px; list-style: none; padding: 0; }
+.steps li { border: 1px solid var(--line); border-radius: 11px; padding: 13px 14px; opacity: 0.38; transition: opacity 250ms, border-color 250ms; }
+.steps li.on { opacity: 1; border-color: var(--c); }
+.steps b { display: block; font-size: 15px; }
+.steps span { color: var(--mute); font-size: 14px; line-height: 1.45; display: block; margin-top: 3px; }
+.answer { margin-top: 18px; min-height: 5.2em; font-size: 18px; }
+.answer mark { background: rgba(74, 222, 156, 0.18); color: var(--hit); border-radius: 5px; padding: 1px 6px; }
+.answer.miss { color: var(--miss); }
+.answer small { display: block; margin-top: 10px; color: var(--mute); font-size: 14.5px; }
+dl { display: grid; grid-template-columns: 190px 1fr; margin-top: 22px; border-top: 1px solid var(--line); }
+dt, dd { padding: 14px 0; border-bottom: 1px solid var(--line); }
+dt { font-weight: 650; }
+dd { color: var(--mute); margin: 0; }
+pre { margin-top: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; overflow-x: auto; font: 15px/1.6 ui-monospace, Consolas, monospace; }
+footer { color: var(--mute); font-size: 15px; padding: 80px 0 46px; }
+@media (max-width: 760px) { .steps { grid-template-columns: 1fr 1fr; } dl { grid-template-columns: 1fr; } dt { border: 0; padding-bottom: 0; } dd { padding-top: 2px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header><span>infer<b>Opt</b></span><a href="https://github.com/cogniera/InferOpt">GitHub</a></header>
+<main>
+  <h1>Stop paying for the same answer twice.</h1>
+  <p class="lead">InferOpt finds questions that mean the same thing, keeps the shape of the answer, and only generates the parts that changed. It can cut token usage by up to 90%.</p>
+  <div class="row"><a class="btn main" href="https://github.com/cogniera/InferOpt">View the code</a><a class="btn" href="https://devpost.com/software/inferopt">Devpost</a></div>
+
+  <h2>Try the idea</h2>
+  <p>Pick a question. This is an illustration with made up answers, not the live model.</p>
+  <div class="demo">
+    <div class="asks" id="asks" role="group" aria-label="Questions"></div>
+    <ol class="steps" id="steps">
+      <li><b>Embed</b><span>the question becomes a vector</span></li>
+      <li><b>Route</b><span id="route"></span></li>
+      <li><b id="t3"></b><span id="d3"></span></li>
+      <li><b>Answer</b><span id="d4"></span></li>
+    </ol>
+    <p class="answer" id="answer" aria-live="polite"></p>
+  </div>
+
+  <h2>How it works</h2>
+  <dl>
+    <dt>Embed</dt><dd>Each query is turned into a vector with OpenAI's text-embedding-3-small.</dd>
+    <dt>Route</dt><dd>Cosine similarity compares it with known intents. At 0.90 or above, a cached template is used.</dd>
+    <dt>Hit</dt><dd>The slot engine fills the template from Redis, or with short, targeted LLM calls for slots it isn't sure about.</dd>
+    <dt>Miss</dt><dd>The LLM answers in full, and a reusable template is extracted and stored for next time.</dd>
+    <dt>Learn</dt><dd>If the same gap shows up three times, it is promoted to a permanent slot.</dd>
+  </dl>
+
+  <h2>Run it</h2>
+  <p>You need Docker and an OpenAI API key. It opens at localhost.</p>
+  <pre><code>git clone https://github.com/cogniera/InferOpt.git
+cd InferOpt
+echo "OPENAI_API_KEY=your-key" > api/.env
+docker compose up --build</code></pre>
+
+  <h2>Built with</h2>
+  <p>FastAPI, Redis, OpenAI embeddings, Express, React, Tailwind and Docker.</p>
+</main>
+<footer>InferOpt, by <a href="https://github.com/cogniera/InferOpt/graphs/contributors">its contributors</a>.</footer>
+<script>
+const asks = [
+  { q: 'How long do refunds take?', hit: false, sim: '0.41', a: 'Refunds take 5 to 7 business days and go back to your original card.', n: 'Full answer generated. Its template is saved, with slots for the time and the destination.' },
+  { q: 'When will I get my refund?', hit: true, sim: '0.94', a: 'Refunds take <mark>5 to 7 business days</mark> and go back to your <mark>original card</mark>.', n: 'Same meaning, so nothing is generated. Both slots come from the cache.' },
+  { q: 'Refund time for gift cards?', hit: true, sim: '0.91', a: 'Refunds take <mark>1 business day</mark> and go back to your <mark>gift card balance</mark>.', n: 'Same shape, different details. Only the two slots are generated.' },
+  { q: 'Do you ship to Canada?', hit: false, sim: '0.22', a: 'Yes, we ship to Canada in 4 to 6 days.', n: 'A new intent. Full answer, and a new template for next time.' },
+];
+const $ = id => document.getElementById(id), steps = [...$('steps').children], calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let timers = [];
+function show(i) {
+  const x = asks[i], c = x.hit ? 'var(--hit)' : 'var(--miss)';
+  timers.forEach(clearTimeout);
+  [...$('asks').children].forEach((b, k) => b.setAttribute('aria-pressed', k === i));
+  $('route').textContent = `closest intent: ${x.sim}`;
+  $('t3').textContent = x.hit ? 'Hit: fill slots' : 'Miss: full call';
+  $('d3').textContent = x.hit ? 'reuse the template' : 'generate, then save a template';
+  $('d4').textContent = x.hit ? 'few or no new tokens' : 'every token is new';
+  $('answer').className = 'answer';
+  $('answer').textContent = '';
+  steps.forEach((s, k) => { s.className = ''; s.style.setProperty('--c', k < 2 ? 'var(--accent)' : c); timers.push(setTimeout(() => { s.className = 'on'; }, calm ? 0 : 320 * k)); });
+  timers.push(setTimeout(() => { $('answer').innerHTML = `${x.a}<small>${x.n}</small>`; if (!x.hit) $('answer').classList.add('miss'); }, calm ? 0 : 1250));
+}
+asks.forEach((x, i) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = x.q; b.onclick = () => show(i); $('asks').append(b); });
+show(1);
+</script>
+</body>
+</html>
