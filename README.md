@@ -126,4 +126,4 @@ All tunables live in `api/templatecache/config.py` and can be overridden via env
 
 ## License
 
-Private — Cogniera.
+The code is public to read, but it has no open source license yet, so all rights are reserved by its authors.
